@@ -1,0 +1,11 @@
+{
+    "require": {
+        "phpcfdi/cfdi-sat-scraper": "^4.0",
+        "phpcfdi/image-captcha-resolver": "^0.2.4"
+    },
+    "config": {
+        "allow-plugins": {
+            "php-http/discovery": true
+        }
+    }
+}

@@ -1,0 +1,63 @@
+{
+    "name": "phpcfdi/rfc",
+    "description": "PHP library to deal with Mexican RFC",
+    "keywords": ["mexico", "sat"],
+    "homepage": "https://github.com/phpcfdi/rfc",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Carlos C Soto",
+            "email": "eclipxe13@gmail.com",
+            "homepage": "https://eclipxe.com.mx/"
+        }
+    ],
+    "support": {
+        "source": "https://github.com/phpcfdi/rfc",
+        "issues": "https://github.com/phpcfdi/rfc/issues"
+    },
+    "require": {
+        "php": ">=8.1",
+        "ext-mbstring": "*",
+        "ext-json": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5.45",
+        "fakerphp/faker": "^1.13"
+    },
+    "autoload": {
+        "psr-4": {
+            "PhpCfdi\\Rfc\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "PhpCfdi\\Rfc\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "dev:build": ["@dev:fix-style", "@dev:check-style", "@dev:test"],
+        "dev:check-style": [
+            "@php tools/php-cs-fixer fix --dry-run --verbose",
+            "@php tools/phpcs --colors -sp"
+        ],
+        "dev:fix-style": [
+            "@php tools/php-cs-fixer fix --verbose",
+            "@php tools/phpcbf --colors -sp"
+        ],
+        "dev:test": [
+            "@php vendor/bin/phpunit --testdox --stop-on-failure",
+            "@php tools/phpstan analyse --no-progress",
+            "@php tools/infection --no-progress --no-interaction --show-mutations"
+        ],
+        "dev:coverage": [
+            "@php -dzend_extension=xdebug.so -dxdebug.mode=coverage vendor/bin/phpunit --coverage-html build/coverage/html/"
+        ]
+    },
+    "scripts-descriptions": {
+        "dev:build": "DEV: run dev:fix-style, dev:check-style and dev:tests, run before pull request",
+        "dev:check-style": "DEV: search for code style errors using php-cs-fixer and phpcs",
+        "dev:fix-style": "DEV: fix code style errors using php-cs-fixer and phpcbf",
+        "dev:test": "DEV: run phpunit, phpstan and infection",
+        "dev:coverage": "DEV: run phpunit with xdebug and storage coverage in build/coverage/html/"
+    }
+}
