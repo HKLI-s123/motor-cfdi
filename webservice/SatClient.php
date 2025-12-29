@@ -53,7 +53,7 @@ class SatClient
      */
     private function resolveFielPaths(string $rfc): array
     {
-        $base = __DIR__ . '/../uploads';
+        $base = __DIR__ . '/../../api/uploads';
 
         $possibleDirs = [
             $base . '/clientes/' . $rfc,

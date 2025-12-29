@@ -18,7 +18,7 @@ use GuzzleHttp\Client;
 // =======================================================
 function findFielDirForRfc(string $rfc): ?string
 {
-    $base = __DIR__ . '/../uploads';
+    $base = __DIR__ . '/../../api/uploads';
 
     $candidates = [
         $base . '/clientes/' . $rfc,
