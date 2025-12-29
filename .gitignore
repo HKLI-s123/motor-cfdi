@@ -1,0 +1,18 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Env
+.env
+.env.*
+
+# Data sensible
+uploads/
+storage/
+logs/
+
+# Temporales
+*.log
+*.tmp
+*.zip
