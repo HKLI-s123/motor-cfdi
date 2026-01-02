@@ -13,7 +13,7 @@ use PhpCfdi\SatWsDescargaMasiva\Shared\DocumentStatus;
 // ==========================
 // 📌 CONEXIÓN A POSTGRES
 // ==========================
-$pdo = new PDO("pgsql:host=localhost;dbname=CuentIA", "postgres", "admin");
+$pdo = new PDO("pgsql:host=localhost;dbname=cuentia_db", "cuentia", "ServCuentI@2002%95");
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
 //
@@ -56,10 +56,10 @@ function runRequester(PDO $pdo)
 $sql = '
     SELECT c.rfc
     FROM clientes c
-    JOIN cfdi_webservice_progress p ON p.rfc = c.rfc
+    LEFT JOIN cfdi_webservice_progress p ON p.rfc = c.rfc
     WHERE c."syncPaused" = FALSE
       AND c."syncStatus" = \'activo\'
-      AND p."statusRequests" != \'completed\'
+      AND (p."statusRequests" IS NULL OR p."statusRequests" != \'completed\')
 ';
 $rfcs = $pdo->query($sql)->fetchAll(PDO::FETCH_COLUMN);
 
@@ -84,7 +84,7 @@ foreach ($rfcs as $rfc) {
         $stmt = $pdo->prepare("SELECT scraper_first_date FROM cfdi_webservice_progress WHERE rfc = ?");
         $stmt->execute([$rfc]);
         $scraperFirst = $stmt->fetchColumn();
-    
+
         if ($scraperFirst) {
             $scraperFirstDate = new DateTime($scraperFirst);
             echo "📌 scraper_first_date = {$scraperFirstDate->format('Y-m-d')}\n";
@@ -105,7 +105,7 @@ foreach ($rfcs as $rfc) {
                     updated_at = NOW()
                 WHERE rfc = ?
             ");
-            
+
             $stmt->execute([$rfc]);
 
             continue;
@@ -121,11 +121,11 @@ foreach ($rfcs as $rfc) {
 
         // Ajustar límite superior: antier y scraper_first_date
         $limitTo = clone $antier;
-        
+
         if ($scraperFirstDate && $scraperFirstDate < $limitTo) {
             $limitTo = $scraperFirstDate;
         }
-        
+
         // Evitar que currentTo pase el límite
         if ($currentTo > $limitTo) {
             $currentTo = clone $limitTo;
@@ -136,7 +136,7 @@ foreach ($rfcs as $rfc) {
         // Crear cliente WS
         $client = new SatClient($rfc);
         $service = $client->getService();
-        
+
        // ============================
        // 1️⃣ SOLICITUD EMITIDOS
        // ============================
@@ -150,13 +150,13 @@ foreach ($rfcs as $rfc) {
        ->withRequestType(RequestType::xml())
        // Emitidos permiten vigentes + cancelados, NO filtramos:
        ->withDocumentStatus(DocumentStatus::undefined());
-       
+
        $queryE = $service->query($paramsEmitidos);
-       
+
        if ($queryE->getStatus()->isAccepted()) {
            $requestId = $queryE->getRequestId();
            echo "✅ Solicitud emitidos generada: $requestId\n";
-       
+
            $stmt = $pdo->prepare("
                INSERT INTO cfdi_webservice_requests
                (rfc, date_from, date_to, request_id, tipo, status)
@@ -166,9 +166,9 @@ foreach ($rfcs as $rfc) {
        } else {
            echo "❌ Error en emitidos: " . $queryE->getStatus()->getMessage() . "\n";
        }
-       
-       
-       
+
+
+
        // ============================
        // 2️⃣ SOLICITUD RECIBIDOS (SOLO VIGENTES)
        // ============================
@@ -182,26 +182,26 @@ foreach ($rfcs as $rfc) {
        ->withRequestType(RequestType::xml())
        // Recibidos NO pueden incluir cancelados
        ->withDocumentStatus(DocumentStatus::active());
-       
+
        $queryR = $service->query($paramsRecibidos);
-       
+
        if ($queryR->getStatus()->isAccepted()) {
-       
+
            $requestId = $queryR->getRequestId();
            echo "✅ Solicitud recibidos generada: $requestId\n";
-       
+
            $stmt = $pdo->prepare("
                INSERT INTO cfdi_webservice_requests
                (rfc, date_from, date_to, request_id, tipo, status)
                VALUES (?, ?, ?, ?, 'recibidos', 'pending')
            ");
-       
+
            $stmt->execute([$rfc, $currentFrom->format("Y-m-d"), $currentTo->format("Y-m-d"), $requestId]);
-       
+
        } else {
-       
+
            $msg = $queryR->getStatus()->getMessage();
-       
+
            if (str_contains($msg, "cancelados")) {
                echo "⚠ SAT bloqueó recibidos porque hay cancelados → se ignoran.\n";
            } else {
@@ -218,11 +218,11 @@ foreach ($rfcs as $rfc) {
         if ($scraperFirstDate && $scraperFirstDate < $upperLimit) {
             $upperLimit = $scraperFirstDate;
         }
-        
+
         if ($newTo > $upperLimit) {
             $newTo = clone $upperLimit;
         }
-        
+
         // Si el nuevo rango ya no tiene sentido → detener
         if ($newFrom >= $upperLimit) {
             echo "🛑 WS completado para RFC $rfc (ya alcanzó scraper_first_date)\n";
@@ -234,7 +234,7 @@ foreach ($rfcs as $rfc) {
                 WHERE rfc = ?
             ");
             $stmt->execute([$rfc]);
-    
+
             continue;
         }
 
