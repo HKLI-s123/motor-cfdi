@@ -87,7 +87,7 @@ while (true) {
     $hour = intval($now->format("H")); // 00-23
 
     // Si NO está entre 1am y 6am → dormir hasta la siguiente hora permitida
-    if ($hour < 9 || $hour >= 18) {
+    if ($hour < 2 || $hour >= 8) {
 
         echo "⏳ Fuera de horario (actual: {$hour}h). Scraper duerme 5 minutos...\n";
         sleep(300); // 5 minutos
@@ -101,7 +101,7 @@ while (true) {
 // ================================
 // 🔌 CONEXIÓN A POSTGRES
 // ================================
-$pdo = new PDO("pgsql:host=localhost;dbname=CuentIA", "postgres", "admin");
+$pdo = new PDO("pgsql:host=localhost;dbname=none", "none", "none");
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
 echo "🔍 Seleccionando RFC disponible...\n";
@@ -112,9 +112,9 @@ $order = ($day % 2 === 0) ? "ASC" : "DESC";
 $pdo->beginTransaction();
 
 $stmt = $pdo->prepare("
-    SELECT rfc 
+    SELECT rfc
     FROM clientes
-    WHERE \"syncPaused\" = FALSE 
+    WHERE \"syncPaused\" = FALSE
       AND \"syncStatus\" = 'activo'
       AND scraper_lock = FALSE
       AND scraper_available = TRUE
@@ -134,7 +134,7 @@ if (!$rfc) {
     $pdo->commit();
     echo "✔ No quedan RFCs libres. Durmiendo 60s...\n";
     sleep(60);
-    continue;    
+    continue;
 }
 
 // bloquear
@@ -153,13 +153,13 @@ echo "🔐 RFC tomado por este worker: $rfc\n";
 $tz = new DateTimeZone('America/Mexico_City');
 $today = new DateTimeImmutable('today', $tz);
 
-$from = $today->sub(new DateInterval('P5D')); // hace 5 días
+$from = $today->sub(new DateInterval('P2D')); // hace 5 días
 $to   = $today->sub(new DateInterval('P1D')); // ayer
 
 // ✅ Marcar límite del scraper para WS
 $pdo->prepare("
     UPDATE cfdi_webservice_progress
-    SET scraper_first_date = 
+    SET scraper_first_date =
         CASE
             WHEN scraper_first_date IS NULL THEN ?
             WHEN ? < scraper_first_date THEN ?
@@ -194,6 +194,8 @@ $storageBase = __DIR__ . '/../storage/cfdis/scraper';
 $rfcOriginal = $rfc; // ← SIEMPRE EXISTE
 $rfc = strtoupper(trim($rfcOriginal));
 
+$descargoAlgo = false;
+
 try {
 // ================================
 // 🧠 PROCESO PRINCIPAL
@@ -203,7 +205,7 @@ try {
 
     if (null === $rfcDir) {
         echo "⚠️ No se encontró carpeta con FIEL para $rfc. Se desactiva scraping.\n";
-    
+
         $pdo->prepare("
             UPDATE clientes
             SET scraper_available = FALSE
@@ -211,20 +213,20 @@ try {
         ")->execute([$rfc]);
 
         $pdo->prepare("
-              UPDATE clientes 
+              UPDATE clientes
               SET scraper_lock = FALSE,
                   scraper_last_run = CURRENT_DATE
               WHERE rfc = ?
         ")->execute([$rfc]);
-    
+
         goto UNLOCK;
     }
-    
+
     // Buscar archivos .cer, .key y .txt automáticamente
     $cerFiles = glob($rfcDir . '/*.cer');
     $keyFiles = glob($rfcDir . '/*.key');
     $txtFiles = glob($rfcDir . '/*.txt');
-    
+
     if (count($cerFiles) === 0 || count($keyFiles) === 0 || count($txtFiles) === 0) {
         echo "⚠️ No se encontraron credenciales completas (.cer/.key/.txt) para $rfc, se salta.\n";
         goto UNLOCK;
@@ -332,6 +334,8 @@ try {
 
                 echo "   📥 Descargados " . count($downloadedUuids) . " CFDIs $typeName.\n";
 
+                $descargoAlgo = true;
+
                 foreach ($downloadedUuids as $uuid) {
                     $xmlPath = $typeDir . '/' . $uuid . '.xml';
                     echo "      → $xmlPath\n";
@@ -402,17 +406,32 @@ try {
    }
 
 UNLOCK:
-    
+
 echo "🔓 Liberando lock para RFC $rfc...\n";
 $pdo->prepare("UPDATE clientes SET scraper_lock = FALSE WHERE rfc = ?")
 ->execute([$rfc]);
 
-$pdo->prepare("
-    UPDATE clientes 
-    SET scraper_lock = FALSE,
-        scraper_last_run = CURRENT_DATE
-    WHERE rfc = ?
-")->execute([$rfc]);
+if ($descargoAlgo) {
+
+    $pdo->prepare("
+        UPDATE clientes
+        SET scraper_lock = FALSE,
+            scraper_last_run = CURRENT_DATE
+        WHERE rfc = ?
+    ")->execute([$rfc]);
+
+    echo "📌 scraper_last_run actualizado.\n";
+
+} else {
+
+    $pdo->prepare("
+        UPDATE clientes
+        SET scraper_lock = FALSE
+        WHERE rfc = ?
+    ")->execute([$rfc]);
+
+    echo "⚠️ No se descargaron CFDIs, scraper_last_run NO actualizado.\n";
+}
 
 echo "\n🎉 Proceso SCRAPER completado.\n";
 

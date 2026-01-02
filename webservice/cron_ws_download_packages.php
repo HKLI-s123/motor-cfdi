@@ -10,7 +10,7 @@ use ZipArchive;
 // ======================================================
 // 📌 CONEXIÓN A POSTGRES
 // ======================================================
-$pdo = new PDO("pgsql:host=localhost;dbname=CuentIA", "postgres", "admin");
+$pdo = new PDO("pgsql:host=localhost;dbname=none", "none", "none");
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
 
@@ -23,16 +23,22 @@ function runDownloader(PDO $pdo)
 {
     echo "\n▶ Ejecutando DOWNLOADER a las " . date("Y-m-d H:i:s") . "\n";
 
+$pdo->beginTransaction();
+
 $sql = "
     SELECT id, rfc, request_id, date_from, date_to, zip_count, tipo
     FROM cfdi_webservice_requests
     WHERE status = 'ready'
+    FOR UPDATE SKIP LOCKED
 ";
 $requests = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
 
+$pdo->commit();
+
+
 if (empty($requests)) {
     echo "No hay solicitudes listas para descargar.\n";
-    exit;
+    return;
 }
 
 echo "📦 Descargando paquetes de " . count($requests) . " solicitudes...\n";
@@ -56,6 +62,16 @@ foreach ($requests as $req) {
     echo "\n=============================\n";
     echo "RFC: $rfc ($tipo) | $dateFrom → $dateTo\n";
     echo "=============================\n";
+
+    echo "📅 Rango WS: {$dateFrom} → {$dateTo}\n";
+
+    $stmt = $pdo->prepare("
+        UPDATE cfdi_webservice_requests
+        SET status = 'downloading', updated_at = NOW()
+        WHERE id = ?
+    ");
+    $stmt->execute([$id]);
+
 
     try {
 
@@ -120,7 +136,13 @@ foreach ($requests as $req) {
             preg_match('/UUID="([^"]+)"/', $content, $uuidMatch);
             preg_match('/Fecha="([^"]+)"/', $content, $fechaMatch);
 
-            $uuid = $uuidMatch[1] ?? null;
+            $rfc = strtoupper(trim($rfc));
+            
+            $uuid = isset($uuidMatch[1])
+                ? strtoupper(trim($uuidMatch[1]))
+                : null;
+
+
             $fecha = isset($fechaMatch[1]) ? substr($fechaMatch[1], 0, 10) : null;
 
             if (!$uuid) {
@@ -130,11 +152,11 @@ foreach ($requests as $req) {
 
          // Verificar si existe (uuid + rfc + tipo)
             $stmt = $pdo->prepare("
-                SELECT id FROM cfdi_files 
-                WHERE uuid = ? AND rfc = ? AND tipo = ?
+                SELECT id FROM cfdi_files
+                WHERE uuid = ? AND rfc = ?
             ");
-            
-            $stmt->execute([$uuid, $rfc, $tipo]);
+
+            $stmt->execute([$uuid, $rfc]);
 
             if ($stmt->rowCount() == 0) {
                 $insert = $pdo->prepare("
@@ -170,7 +192,9 @@ foreach ($requests as $req) {
         // Marcamos como error
         $stmt = $pdo->prepare("
             UPDATE cfdi_webservice_requests
-            SET status = 'error', error_message = ?, updated_at = NOW()
+            SET status = 'ready',
+            error_message = ?,
+            updated_at = NOW()
             WHERE id = ?
         ");
         $stmt->execute([$e->getMessage(), $id]);

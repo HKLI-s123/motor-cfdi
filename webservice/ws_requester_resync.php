@@ -14,9 +14,9 @@ use PhpCfdi\SatWsDescargaMasiva\Shared\DocumentStatus;
 // 🔌 CONEXIÓN A POSTGRES
 // ======================================================
 $pdo = new PDO(
-    "pgsql:host=localhost;dbname=CuentIA",
-    "postgres",
-    "admin",
+    "pgsql:host=localhost;dbname=none",
+    "none",
+    "none",
     [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
@@ -30,6 +30,8 @@ echo "===============================\n\n";
 // ======================================================
 // 📌 OBTENER RFCs PARA RESYNC
 // ======================================================
+$pdo->beginTransaction();
+
 $sql = "
 SELECT rfc, last_resync_at, resync_days
 FROM cfdi_webservice_progress
@@ -38,9 +40,13 @@ WHERE
     OR last_resync_at < NOW() - INTERVAL '15 days'
 ORDER BY last_resync_at NULLS FIRST
 LIMIT 20
+FOR UPDATE SKIP LOCKED
 ";
 
 $rows = $pdo->query($sql)->fetchAll();
+
+$pdo->commit();
+
 
 if (empty($rows)) {
     echo "✔ No hay RFCs pendientes de resync.\n";
@@ -63,10 +69,12 @@ foreach ($rows as $row) {
 
     try {
 
+        $generoSolicitudes = false;
+
         // --------------------------------------------------
         // 📅 DEFINIR RANGO DE RESYNC
         // --------------------------------------------------
-        $to = (new DateTime())->modify('-2 days'); // evitar latencia SAT
+        $to = (new DateTime())->modify('-3 days'); // evitar latencia + solape WS diario/scraper
         $from = (clone $to)->modify("-{$resyncDays} days");
 
         echo "📅 Rango RESYNC: " .
@@ -134,6 +142,7 @@ foreach ($rows as $row) {
             ]);
 
             echo "✅ Emitidos RESYNC generado: $requestId\n";
+            $generoSolicitudes = true;
 
         } else {
             echo "❌ Error emitidos: " .
@@ -172,6 +181,7 @@ foreach ($rows as $row) {
             ]);
 
             echo "✅ Recibidos RESYNC generado: $requestId\n";
+            $generoSolicitudes = true;
 
         } else {
 
@@ -187,14 +197,21 @@ foreach ($rows as $row) {
         // --------------------------------------------------
         // ✅ MARCAR RESYNC
         // --------------------------------------------------
-        $update = $pdo->prepare("
-            UPDATE cfdi_webservice_progress
-            SET last_resync_at = NOW()
-            WHERE rfc = ?
-        ");
-        $update->execute([$rfc]);
-
-        echo "📌 last_resync_at actualizado.\n";
+        if ($generoSolicitudes) {
+        
+            $update = $pdo->prepare("
+                UPDATE cfdi_webservice_progress
+                SET last_resync_at = NOW()
+                WHERE rfc = ?
+            ");
+            $update->execute([$rfc]);
+        
+            echo "📌 last_resync_at actualizado.\n";
+        
+        } else {
+        
+            echo "⚠ No se generaron solicitudes de resync, no se actualiza last_resync_at.\n";
+        }
 
     } catch (Throwable $e) {
 

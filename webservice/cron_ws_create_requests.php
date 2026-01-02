@@ -13,7 +13,7 @@ use PhpCfdi\SatWsDescargaMasiva\Shared\DocumentStatus;
 // ==========================
 // 📌 CONEXIÓN A POSTGRES
 // ==========================
-$pdo = new PDO("pgsql:host=localhost;dbname=cuentia_db", "cuentia", "ServCuentI@2002%95");
+$pdo = new PDO("pgsql:host=localhost;dbname=none", "none", "none");
 $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
 //
@@ -59,7 +59,6 @@ $sql = '
     LEFT JOIN cfdi_webservice_progress p ON p.rfc = c.rfc
     WHERE c."syncPaused" = FALSE
       AND c."syncStatus" = \'activo\'
-      AND (p."statusRequests" IS NULL OR p."statusRequests" != \'completed\')
 ';
 $rfcs = $pdo->query($sql)->fetchAll(PDO::FETCH_COLUMN);
 
@@ -93,22 +92,11 @@ foreach ($rfcs as $rfc) {
             echo "📌 scraper_first_date vacío → WS descargará desde hace 5 años\n";
         }
 
-        // =========================
-        // 🛑 DETENER WS si ya alcanzó la fecha mínima del scraper
-        // =========================
-        if ($scraperFirstDate && $currentFrom >= $scraperFirstDate) {
-            echo "🛑 Deteniendo WS: Ya se alcanzó scraper_first_date ({$scraperFirstDate->format('Y-m-d')})\n";
-
-            $stmt = $pdo->prepare("
-                UPDATE cfdi_webservice_progress
-                SET \"statusRequests\" = 'completed',
-                    updated_at = NOW()
-                WHERE rfc = ?
-            ");
-
-            $stmt->execute([$rfc]);
-
-            continue;
+        $historicalDone = false;
+        
+        if ($scraperFirstDate && $currentTo >= $scraperFirstDate) {
+            $historicalDone = true;
+            echo "🟡 Histórico completado, WS entra en modo DAILY\n";
         }
 
         // Antier: límite para evitar duplicar scraper
@@ -132,6 +120,30 @@ foreach ($rfcs as $rfc) {
         }
 
         echo "⏳ Rango: {$currentFrom->format('Y-m-d')} → {$currentTo->format('Y-m-d')}\n";
+
+        // ==========================
+        // 🧠 SELECCIÓN DE MODO WS
+        // ==========================
+        if ($historicalDone) {
+            $antier = (new DateTime())->modify("-2 days");
+            
+            $lastDaily = $progress['ws_daily_last_date']
+                ? new DateTime($progress['ws_daily_last_date'])
+                : clone $scraperFirstDate;
+            
+            $currentFrom = (clone $lastDaily)->modify("+1 day");
+            $currentTo   = clone $antier;
+            
+            // 🚫 Nada nuevo que pedir
+            if ($currentFrom > $currentTo) {
+                echo "✔ WS DAILY sin rango nuevo, se omite\n";
+                continue;
+            }
+            
+            echo "🔵 WS DAILY: {$currentFrom->format('Y-m-d')} → {$currentTo->format('Y-m-d')}\n";
+        } else {
+            echo "🟢 WS HISTÓRICO ACTIVO\n";
+        }
 
         // Crear cliente WS
         $client = new SatClient($rfc);
@@ -163,6 +175,21 @@ foreach ($rfcs as $rfc) {
                VALUES (?, ?, ?, ?, 'emitidos', 'pending')
            ");
            $stmt->execute([$rfc, $currentFrom->format("Y-m-d"), $currentTo->format("Y-m-d"), $requestId]);
+
+           // ==========================
+           // ✅ AVANZAR PUNTERO DAILY
+           // ==========================
+           $pdo->prepare("
+               UPDATE cfdi_webservice_progress
+               SET ws_daily_last_date = ?
+               WHERE rfc = ?
+           ")->execute([
+               $currentTo->format('Y-m-d'),
+               $rfc
+           ]);
+           
+           echo "📌 ws_daily_last_date actualizado → {$currentTo->format('Y-m-d')}\n";
+
        } else {
            echo "❌ Error en emitidos: " . $queryE->getStatus()->getMessage() . "\n";
        }
@@ -198,6 +225,20 @@ foreach ($rfcs as $rfc) {
 
            $stmt->execute([$rfc, $currentFrom->format("Y-m-d"), $currentTo->format("Y-m-d"), $requestId]);
 
+           // ==========================
+           // ✅ AVANZAR PUNTERO DAILY
+           // ==========================
+           $pdo->prepare("
+               UPDATE cfdi_webservice_progress
+               SET ws_daily_last_date = ?
+               WHERE rfc = ?
+           ")->execute([
+               $currentTo->format('Y-m-d'),
+               $rfc
+           ]);
+           
+           echo "📌 ws_daily_last_date actualizado → {$currentTo->format('Y-m-d')}\n";
+
        } else {
 
            $msg = $queryR->getStatus()->getMessage();
@@ -225,35 +266,35 @@ foreach ($rfcs as $rfc) {
 
         // Si el nuevo rango ya no tiene sentido → detener
         if ($newFrom >= $upperLimit) {
-            echo "🛑 WS completado para RFC $rfc (ya alcanzó scraper_first_date)\n";
-
-            $stmt = $pdo->prepare("
-                UPDATE cfdi_webservice_progress
-                SET \"statusRequests\" = 'completed',
-                    updated_at = NOW()
-                WHERE rfc = ?
-            ");
-            $stmt->execute([$rfc]);
-
-            continue;
+            echo "🟡 Histórico WS terminado para RFC $rfc\n";
+            $historicalDone = true;
         }
 
-        $update = $pdo->prepare("
-            UPDATE cfdi_webservice_progress
-            SET current_from = ?, current_to = ?, status = 'running', updated_at = NOW()
-            WHERE rfc = ?
-        ");
-
-        $update->execute([
-            $newFrom->format("Y-m-d"),
-            $newTo->format("Y-m-d"),
-            $rfc
-        ]);
-
-        echo "➡ Avanzando progreso: {$newFrom->format('Y-m-d')} → {$newTo->format('Y-m-d')}\n";
+        if (!$historicalDone) {
+            $update = $pdo->prepare("
+                UPDATE cfdi_webservice_progress
+                SET current_from = ?, current_to = ?, status = 'running', updated_at = NOW()
+                WHERE rfc = ?
+            ");
+        
+            $update->execute([
+                $newFrom->format("Y-m-d"),
+                $newTo->format("Y-m-d"),
+                $rfc
+            ]);
+        
+            echo "➡ Avanzando histórico: {$newFrom->format('Y-m-d')} → {$newTo->format('Y-m-d')}\n";
+        } else {
+            echo "🔵 WS DAILY ejecutado, sin modificar histórico\n";
+        }
 
     } catch (Exception $e) {
         echo "⚠ Error con RFC $rfc → " . $e->getMessage() . "\n";
+    }
+
+    if ($historicalDone) {
+    echo "🛑 RFC $rfc en modo DAILY estable, se salta hasta próximo ciclo\n";
+    continue;
     }
 
     // Evitar saturar
